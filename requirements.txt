@@ -1,0 +1,7 @@
+requests
+streamlit
+altair
+pandas
+pypdf
+openai
+python-dotenv
