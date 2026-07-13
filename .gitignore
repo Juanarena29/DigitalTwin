@@ -2,5 +2,7 @@
 __pycache__/
 *.pyc
 data/twin.db
+data/behavior_addendum.txt
 .venv/
 venv/
+.streamlit/

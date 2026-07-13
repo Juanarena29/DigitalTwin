@@ -33,15 +33,19 @@ AGE_CLAIM_PATTERNS = (
     re.compile(r"\bnació en \d{4}\b", re.IGNORECASE),
     re.compile(r"\btiene \d{1,2}\b", re.IGNORECASE),
     re.compile(r"\bborn in \d{4}\b", re.IGNORECASE),
+    re.compile(r"\b\d{1,2}\s*years?\s*old\b", re.IGNORECASE),
+    re.compile(r"\bi'?m\s*\d{1,2}\b", re.IGNORECASE),
+    re.compile(r"\bborn\s*(in|on)?\s*\d{4}\b", re.IGNORECASE),
 )
 CONTEXT_AGE_PATTERN = re.compile(
-    r"\b(edad|años|nació|nacimiento|born|years old)\b",
+    r"\b(edad|nació|nacimiento|born|years old|age)\b"
+    r"|\baños\b(?!\s*(de\s*)?(experiencia|trabajando|en\s))",
     re.IGNORECASE,
 )
 UNSURE_PATTERN = re.compile(
     r"\b("
     r"no (lo )?s[eé]|no tengo|no figure|no consta|no está|no disponible|"
-    r"don't know|not in my profile|no tengo esa info|no tengo esa información"
+    r"don't know|not in my profile"
     r")\b",
     re.IGNORECASE,
 )
@@ -100,18 +104,24 @@ def tool_names(tools_used: list | None) -> set[str]:
     return names
 
 
-def _operational_pass(candidate_response: str, tools_used: list | None) -> dict | None:
+def _operational_length_check(candidate_response: str, tools_used: list | None) -> dict | None:
+    """Fail fast if an operational-tool confirmation is too long.
+
+    Does NOT return an early pass — a short confirmation can still contain an
+    ungrounded fact (e.g. "Scheduled for Tuesday, by the way I worked at Google
+    for 5 years"), so success here just means "continue to grounding checks",
+    not "this response is approved".
+    """
     if tools_used and OPERATIONAL_TOOLS.intersection(tool_names(tools_used)):
         words = _word_count(candidate_response)
-        if words <= MAX_RESPONSE_WORDS:
-            return {"pass": True, "feedback": ""}
-        return {
-            "pass": False,
-            "feedback": (
-                f"Response is {words} words; keep confirmation under {MAX_RESPONSE_WORDS}. "
-                "Be brief: date, time, email, done."
-            ),
-        }
+        if words > MAX_RESPONSE_WORDS:
+            return {
+                "pass": False,
+                "feedback": (
+                    f"Response is {words} words; keep confirmation under {MAX_RESPONSE_WORDS}. "
+                    "Be brief: date, time, email, done."
+                ),
+            }
     return None
 
 
@@ -169,9 +179,9 @@ def evaluate_response(
     tools_used: list | None = None,
     history: list | None = None,
 ) -> dict:
-    operational = _operational_pass(candidate_response, tools_used)
-    if operational is not None:
-        return operational
+    operational_fail = _operational_length_check(candidate_response, tools_used)
+    if operational_fail is not None:
+        return operational_fail
 
     words = _word_count(candidate_response)
     if words > MAX_RESPONSE_WORDS:
@@ -183,8 +193,10 @@ def evaluate_response(
             ),
         }
 
-    if is_operational_turn(user_message, history):
-        return {"pass": True, "feedback": ""}
+    # NOTE: operational_turn is a soft signal (scheduling/contact language present),
+    # NOT proof a tool actually ran. It must never bypass fact-grounding checks —
+    # it's only used below to relax the LLM prompt's tone/length expectations.
+    operational_turn = is_operational_turn(user_message, history)
 
     age_check = _check_age_hallucination(user_message, candidate_response, context, tools_used)
     if age_check is not None:
@@ -197,6 +209,12 @@ def evaluate_response(
     tools_note = ""
     if tools_used:
         tools_note = f"\n# Tools used this turn: {', '.join(sorted(tool_names(tools_used)))}\n"
+    if operational_turn:
+        tools_note += (
+            "\n# Note: this turn contains scheduling/contact language. "
+            "Do not fail for OFF TOPIC on that basis alone, but STRICT GROUNDING "
+            "still applies to any factual claims about the twin.\n"
+        )
 
     prompt = f"""You are a strict quality gate for {TWIN_NAME}'s digital twin.
 
@@ -219,21 +237,23 @@ When unsure whether a fact is in context, FAIL the response.
 Be strict. If any fact looks invented or inferred, fail.
 Respond with JSON only: {{"pass": true or false, "feedback": "brief reason if fail, else empty string"}}"""
 
-    response = chat_completion(
-        [{"role": "user", "content": prompt}],
-        model=EVALUATOR_MODEL,
-        response_format={"type": "json_object"},
-    )
-
     try:
+        response = chat_completion(
+            [{"role": "user", "content": prompt}],
+            model=EVALUATOR_MODEL,
+            response_format={"type": "json_object"},
+        )
         result = json.loads(response.choices[0].message.content)
         return {
-            "pass": bool(result.get("pass")),
+            "pass": result.get("pass") is True,
             "feedback": result.get("feedback", ""),
         }
-    except (json.JSONDecodeError, TypeError):
-        print("[Evaluator] Failed to parse response, rejecting answer", flush=True)
-        return {
-            "pass": False,
-            "feedback": "Evaluator could not verify grounding. Reply only with approved context facts.",
-        }
+    except (json.JSONDecodeError, TypeError) as exc:
+        print(f"[Evaluator] Failed to parse response, rejecting answer: {exc}", flush=True)
+    except Exception as exc:  # network errors, timeouts, rate limits, etc.
+        print(f"[Evaluator] LLM call failed, rejecting answer: {exc}", flush=True)
+
+    return {
+        "pass": False,
+        "feedback": "Evaluator could not verify grounding. Reply only with approved context facts.",
+    }

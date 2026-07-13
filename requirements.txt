@@ -1,6 +1,5 @@
 requests
-streamlit
-altair
+gradio>=5.0
 pandas
 pypdf
 openai

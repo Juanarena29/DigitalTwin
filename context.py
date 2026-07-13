@@ -64,6 +64,16 @@ When giving advice, cite only your real path from the approved facts above.
 Use markdown styling (no code blocks).
 """.strip()
 
+
+def get_twin_system_prompt() -> str:
+    from improver.addendum import load_behavior_addendum
+
+    addendum = load_behavior_addendum()
+    if not addendum:
+        return TWIN_SYSTEM_PROMPT
+    return f"{TWIN_SYSTEM_PROMPT}\n\n# Ajustes de comportamiento aprendidos\n\n{addendum}"
+
+
 EVALUATOR_CONTEXT = f"""APPROVED FACTS ONLY — the twin may cite nothing outside this text:
 
 Personal summary:

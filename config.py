@@ -11,10 +11,12 @@ DATA_DIR = BASE_DIR / "data"
 SUMMARY_PATH = DATA_DIR / "summary.txt"
 LINKEDIN_PATH = DATA_DIR / "linkedin.pdf"
 DB_PATH = DATA_DIR / "twin.db"
+BEHAVIOR_ADDENDUM_PATH = DATA_DIR / "behavior_addendum.txt"
 
 MODEL_NAME = "gpt-4o-mini"
 EVALUATOR_MODEL = "gpt-4o-mini"
 GUARDRAIL_MODEL = "gpt-4o-mini"
+IMPROVER_MODEL = "gpt-4o-mini"
 MAX_EVAL_RETRIES = 3
 MAX_RESPONSE_WORDS = 100
 

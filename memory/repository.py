@@ -21,6 +21,7 @@ def save_turn(
     tools_used: list[str] | None = None,
     evaluator_attempts: int = 0,
     evaluator_passed: bool = True,
+    evaluator_detail: dict | None = None,
 ) -> None:
     try:
         ts = datetime.now(timezone.utc).isoformat()
@@ -28,7 +29,9 @@ def save_turn(
         insert_message(session_id, "assistant", assistant_response, ts)
         if tools_used:
             insert_message(session_id, "tool_log", json.dumps(tools_used), ts)
-        if evaluator_attempts > 0:
+        if evaluator_detail is not None:
+            insert_message(session_id, "evaluator_log", json.dumps(evaluator_detail), ts)
+        elif evaluator_attempts > 0:
             insert_message(
                 session_id,
                 "evaluator_log",
@@ -37,6 +40,32 @@ def save_turn(
             )
     except Exception as exc:
         print(f"[Memory] Failed to save turn: {exc}", flush=True)
+
+
+def fetch_max_retry_failures() -> list[dict]:
+    from config import MAX_EVAL_RETRIES
+
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT content FROM conversations WHERE role = 'evaluator_log' ORDER BY id"
+        ).fetchall()
+
+    cases: list[dict] = []
+    for row in rows:
+        try:
+            payload = json.loads(row["content"])
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("passed") is not False:
+            continue
+        if payload.get("attempts", 0) < MAX_EVAL_RETRIES:
+            continue
+        if not payload.get("user_message"):
+            continue
+        cases.append(payload)
+    return cases
 
 
 def get_session_messages(session_id: str) -> list[dict]:
